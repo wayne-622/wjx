@@ -2326,6 +2326,8 @@ function genHint(){
       badge.style.background='rgba(78,204,163,.12)';
       badge.style.border='1px solid #4ecca3';
       badge.style.color='#4ecca3';
+      badge.setAttribute('data-answer',best.a||'');
+      badge.setAttribute('data-type',best.type||'unknown');
       var displayTitle='';
       if(matchMode==='cn'){
         displayTitle='<div style="font-size:12px;color:#aaa;margin-bottom:4px;">📚 '+best.t+'</div>';
@@ -2399,6 +2401,151 @@ function genHint(){
       :'0 4px 15px rgba(221,237,250,.3)';
   };
   document.body.appendChild(toggleBtn);
+
+  // 右下角一键填写按钮
+  var fillBtn=document.createElement('button');
+  fillBtn.textContent='✏️ 一键填写';
+  fillBtn.style.cssText='position:fixed;right:20px;bottom:70px;z-index:999999;'+
+    'background:#DDEDFA;color:#1a1a2e;border:none;'+
+    'padding:12px 18px;border-radius:50px;font-size:14px;font-weight:700;'+
+    'cursor:pointer;box-shadow:0 4px 15px rgba(221,237,250,.3);'+
+    'transition:all .3s;letter-spacing:1px;';
+  fillBtn.onmouseenter=function(){this.style.transform='scale(1.05)';this.style.boxShadow='0 6px 20px rgba(221,237,250,.5)';};
+  fillBtn.onmouseleave=function(){this.style.transform='scale(1)';this.style.boxShadow='0 4px 15px rgba(221,237,250,.3)';};
+  fillBtn.onclick=function(){
+    var hints=document.querySelectorAll('.wjx-hint-panel[data-answer]');
+    var filled=0;
+    function fireInput(el){
+      el.dispatchEvent(new Event('input',{bubbles:true}));
+      el.dispatchEvent(new Event('change',{bubbles:true}));
+      el.dispatchEvent(new Event('blur',{bubbles:true}));
+    }
+    hints.forEach(function(hint){
+      var ans=(hint.getAttribute('data-answer')||'').trim();
+      var type=hint.getAttribute('data-type')||'unknown';
+      if(!ans) return;
+      var container=hint.parentElement;
+      if(!container) return;
+      var filledThis=false;
+
+      // 单选
+      if(!filledThis&&(type==='radio'||type==='unknown')){
+        var radios=container.querySelectorAll('input[type="radio"]');
+        if(radios.length){
+          // 收集所有标签文本
+          var radioMap=[];
+          radios.forEach(function(r){
+            var lbl=r.closest('label')||r.parentElement;
+            var txt=lbl?lbl.innerText.trim():'';
+            radioMap.push({input:r,text:txt});
+          });
+          // 精确匹配
+          var hit=radioMap.filter(function(r){return r.text===ans;});
+          // 模糊匹配：答案包含在标签中，或标签包含在答案中
+          if(!hit.length) hit=radioMap.filter(function(r){return r.text&&(r.text.includes(ans)||ans.includes(r.text));});
+          if(hit.length){hit[0].input.checked=true;fireInput(hit[0].input);filledThis=true;}
+        }
+      }
+
+      // 多选
+      if(!filledThis&&(type==='checkbox')){
+        var checks=container.querySelectorAll('input[type="checkbox"]');
+        if(checks.length){
+          var ansParts=ans.split(/[,，;；|｜]\\s*/).map(function(s){return s.trim();}).filter(Boolean);
+          checks.forEach(function(c){
+            var lbl=c.closest('label')||c.parentElement;
+            var txt=lbl?lbl.innerText.trim():'';
+            ansParts.forEach(function(p){
+              if(txt===p||txt.includes(p)||p.includes(txt)){
+                c.checked=true;fireInput(c);
+              }
+            });
+          });
+          filledThis=true;
+        }
+      }
+
+      // 填空/文本（核心改进：支持多空题）
+      if(!filledThis&&(type==='textarea'||type==='fill'||type==='wordbank')){
+        // 收集所有可填写的输入框（textarea + text input）
+        var allInputs=Array.from(container.querySelectorAll('textarea'));
+        var textInputs=Array.from(container.querySelectorAll('input[type="text"],input:not([type]):not([radio]):not([checkbox]):not([hidden])'));
+        // 排除 hint 面板自身的 input
+        allInputs=allInputs.concat(textInputs).filter(function(el){return !el.closest('.wjx-hint-panel');});
+
+        if(allInputs.length===1){
+          // 只有一个输入框 → 直接填入全部答案
+          allInputs[0].value=ans;
+          fireInput(allInputs[0]);
+          filledThis=true;
+        } else if(allInputs.length>1){
+          // 多个输入框 → 拆分答案，逐个填入
+          // 先尝试按常见分隔符拆
+          var parts=ans.split(/[,，;；|｜\\n]\\\\s*/).map(function(s){return s.trim();}).filter(Boolean);
+
+          // 如果拆出来只有1个，但有多个空 → 按单个空格再拆
+          // 适用场景: "no excuse for" → 3个空分别填 "no" "excuse" "for"
+          if(parts.length===1&&allInputs.length>=2){
+            var spaceParts=ans.split(/\\\\s+/).map(function(s){return s.trim();}).filter(Boolean);
+            // 拆出来的词数 >= 空数时才用空格拆分（避免把一个长词拆散）
+            if(spaceParts.length>=allInputs.length) parts=spaceParts;
+          }
+
+          if(parts.length>=allInputs.length){
+            allInputs.forEach(function(inp,i){if(i<parts.length){inp.value=parts[i];fireInput(inp);}});
+          } else if(parts.length===1){
+            allInputs.forEach(function(inp){inp.value=parts[0];fireInput(inp);});
+          } else{
+            allInputs.forEach(function(inp,i){if(i<parts.length){inp.value=parts[i];fireInput(inp);}});
+          }
+          filledThis=true;
+        }
+      }
+
+      // 下拉
+      if(!filledThis&&(type==='select')){
+        var sel=container.querySelector('select');
+        if(sel){
+          for(var i=0;i<sel.options.length;i++){
+            var ot=sel.options[i].text.trim();
+            if(ot===ans||ot.includes(ans)||ans.includes(ot)){
+              sel.selectedIndex=i;fireInput(sel);filledThis=true;break;
+            }
+          }
+        }
+      }
+
+      // 匹配题
+      if(!filledThis&&type==='matching'){
+        var mLabels=container.querySelectorAll('.label,.ui-controlgroup label');
+        if(mLabels.length){
+          var mPairs=ans.split(/[,，]\s*/);
+          mPairs.forEach(function(pair){
+            var parts=pair.split(/→|->/);
+            if(parts.length===2){
+              var def=parts[1].trim();
+              mLabels.forEach(function(lbl){
+                var txt=lbl.innerText.trim();
+                if(txt===def||txt.includes(def)){
+                  var input=lbl.querySelector('input');
+                  if(input){input.checked=true;fireInput(input);}
+                }
+              });
+            }
+          });
+          filledThis=true;
+        }
+      }
+
+      if(filledThis) filled++;
+    });
+    this.textContent='✅ 已填写 '+filled+' 题';
+    this.style.background='#4ecca3';this.style.color='#fff';
+    this.style.boxShadow='0 4px 15px rgba(78,204,163,.4)';
+    var self=this;
+    setTimeout(function(){self.textContent='✏️ 一键填写';self.style.background='#DDEDFA';self.style.color='#1a1a2e';self.style.boxShadow='0 4px 15px rgba(221,237,250,.3)';},2000);
+  };
+  document.body.appendChild(fillBtn);
 
   console.log('答案提示(标题+中文+匹配): 匹配 '+matched+'/'+total+', 匹配题 '+matchMatched+'/'+matchTotal+', 跳过无关 '+noiseSkipped);
 })();`;
